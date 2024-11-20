@@ -23,6 +23,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.security.cert.Certificate;
 import java.security.cert.X509Certificate;
+import java.util.Collection;
 import java.util.List;
 
 import javax.jmdns.JmDNS;
@@ -42,6 +43,10 @@ import org.eclipse.leshan.core.endpoint.EndPointUriHandler;
 import org.eclipse.leshan.core.endpoint.Protocol;
 import org.eclipse.leshan.core.model.ObjectLoader;
 import org.eclipse.leshan.core.model.ObjectModel;
+import org.eclipse.leshan.core.node.LwM2mResource;
+import org.eclipse.leshan.core.observation.Observation;
+import org.eclipse.leshan.core.request.ReadRequest;
+import org.eclipse.leshan.core.response.ReadResponse;
 import org.eclipse.leshan.demo.LwM2mDemoConstant;
 import org.eclipse.leshan.demo.cli.ShortErrorMessageHandler;
 import org.eclipse.leshan.demo.server.cli.LeshanServerDemoCLI;
@@ -56,6 +61,9 @@ import org.eclipse.leshan.server.model.LwM2mModelProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
 import org.eclipse.leshan.server.redis.RedisRegistrationStore;
 import org.eclipse.leshan.server.redis.RedisSecurityStore;
+import org.eclipse.leshan.server.registration.Registration;
+import org.eclipse.leshan.server.registration.RegistrationListener;
+import org.eclipse.leshan.server.registration.RegistrationUpdate;
 import org.eclipse.leshan.servers.security.EditableSecurityStore;
 import org.eclipse.leshan.servers.security.FileSecurityStore;
 import org.eclipse.leshan.transport.californium.PrincipalMdcConnectionListener;
@@ -131,6 +139,39 @@ public class LeshanServerDemo {
             webServer.start();
             LOG.info("Web server started at {}.", webServer.getURI());
 
+            lwm2mServer.getRegistrationService().addListener(new RegistrationListener() {
+                @Override
+                public void registered(Registration registration, Registration previousReg,
+                        Collection<Observation> previousObservations) {
+                    LOG.info("new device: {}", registration.getEndpoint());
+
+                    try {
+                        ReadResponse response = lwm2mServer.send(registration, new ReadRequest(3, 0, 13));
+                        if (response.isSuccess()) { // <-- error: response is null when using CoAP over TCP
+                            LOG.info("Device time: {}", ((LwM2mResource) response.getContent()).getValue());
+                        } else {
+                            LOG.info("Failed to read: {} {}", response.getCode(), response.getErrorMessage());
+                        }
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        LOG.error("Interrupted while reading device time", e);
+                    } catch (Exception e) {
+                        LOG.error("Unexpected error while reading device time", e);
+                    }
+                }
+
+                @Override
+                public void updated(RegistrationUpdate update, Registration updatedReg, Registration previousReg) {
+                    LOG.info("device is still here: {}", updatedReg.getEndpoint());
+                }
+
+                @Override
+                public void unregistered(Registration registration, Collection<Observation> observations,
+                        boolean expired, Registration newReg) {
+                    LOG.info("device left: {}", registration.getEndpoint());
+                }
+            });
+
         } catch (Exception e) {
 
             // Handler Execution Error
@@ -201,7 +242,8 @@ public class LeshanServerDemo {
         Configuration serverCoapConfig = endpointsBuilder.createDefaultConfiguration();
 
         // Set some DTLS stuff
-        // These configuration values are always overwritten by CLI therefore set them to transient.
+        // These configuration values are always overwritten by CLI therefore set them
+        // to transient.
         serverCoapConfig.setTransient(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY);
         serverCoapConfig.set(DtlsConfig.DTLS_RECOMMENDED_CIPHER_SUITES_ONLY, !cli.dtls.supportDeprecatedCiphers);
         serverCoapConfig.setTransient(DtlsConfig.DTLS_CONNECTION_ID_LENGTH);
